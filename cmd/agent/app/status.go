@@ -8,6 +8,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/api/util"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/status"
+	"github.com/DataDog/datadog-agent/pkg/util/log"
+	"github.com/DataDog/datadog-agent/pkg/util/scrubber"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -57,15 +60,28 @@ var statusCmd = &cobra.Command{
 			return fmt.Errorf("unable to set up global agent configuration: %v", err)
 		}
 
-		err = config.SetupLogger(loggerName, config.GetEnvDefault("DD_LOG_LEVEL", "off"), "", "", false, true, false)
+		err = config.SetupLogger(loggerName, config.GetEnvDefault("DD_LOG_LEVEL", "info"), "", "", false, true, false)
 		if err != nil {
 			fmt.Printf("Cannot setup logger, exiting: %v\n", err)
 			return err
 		}
+		defer log.Flush()
 
 		_ = common.SetupSystemProbeConfig(sysProbeConfFilePath)
 
-		return requestStatus()
+		err = requestStatus()
+
+		if err != nil {
+			errMsg := err.Error()
+			scrubbed, scrubErr := scrubber.ScrubBytes([]byte(errMsg))
+			if scrubErr != nil {
+				err = errors.New("[REDACTED] failed to clean error")
+			} else {
+				err = errors.New(string(scrubbed))
+			}
+		}
+
+		return err
 	},
 }
 
@@ -93,7 +109,7 @@ func requestStatus() error {
 	var s string
 
 	if !prettyPrintJSON && !jsonStatus {
-		fmt.Printf("Getting the status from the agent.\n\n")
+		log.Info("Getting the status from the agent.\n\n")
 	}
 	ipcAddress, err := config.GetIPCAddress()
 	if err != nil {
@@ -208,10 +224,15 @@ func makeRequest(url string) ([]byte, error) {
 		json.Unmarshal(r, &errMap) //nolint:errcheck
 		// If the error has been marshalled into a json object, check it and return it properly
 		if err, found := errMap["error"]; found {
-			e = fmt.Errorf(err)
+			scrubbed, err := scrubber.ScrubBytes([]byte(err))
+			if err != nil {
+				e = fmt.Errorf("[REDACTED] failed to scrub agent request error")
+			} else {
+				e = fmt.Errorf(string(scrubbed))
+			}
 		}
 
-		fmt.Printf("Could not reach agent: %v \nMake sure the agent is running before requesting the status and contact support if you continue having issues. \n", e)
+		log.Warnf("Could not reach agent: %v \nMake sure the agent is running before requesting the status and contact support if you continue having issues. \n", e)
 		return nil, e
 	}
 
