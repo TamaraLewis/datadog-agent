@@ -158,6 +158,7 @@ type RuleSetListener interface {
 // against it. If the rule matches, the listeners for this rule set are notified
 type RuleSet struct {
 	opts             *Opts
+	evalOpts         *eval.Opts
 	eventRuleBuckets map[eval.EventType]*RuleBucket
 	rules            map[eval.RuleID]*Rule
 	fieldEvaluators  map[string]eval.Evaluator
@@ -189,7 +190,7 @@ func (rs *RuleSet) GetRules() map[eval.RuleID]*Rule {
 // ListMacroIDs returns the list of MacroIDs from the ruleset
 func (rs *RuleSet) ListMacroIDs() []MacroID {
 	var ids []string
-	for macroID := range rs.opts.Macros {
+	for macroID := range rs.evalOpts.Macros {
 		ids = append(ids, macroID)
 	}
 	return ids
@@ -213,7 +214,7 @@ func (rs *RuleSet) AddMacros(macros []*MacroDefinition) *multierror.Error {
 func (rs *RuleSet) AddMacro(macroDef *MacroDefinition) (*eval.Macro, error) {
 	var err error
 
-	if _, exists := rs.opts.Macros[macroDef.ID]; exists {
+	if _, exists := rs.evalOpts.Macros[macroDef.ID]; exists {
 		return nil, &ErrMacroLoad{Definition: macroDef, Err: errors.New("multiple definition with the same ID")}
 	}
 
@@ -223,16 +224,16 @@ func (rs *RuleSet) AddMacro(macroDef *MacroDefinition) (*eval.Macro, error) {
 	case macroDef.Expression != "" && len(macroDef.Values) > 0:
 		return nil, &ErrMacroLoad{Definition: macroDef, Err: errors.New("only one of 'expression' and 'values' can be defined")}
 	case macroDef.Expression != "":
-		if macro.Macro, err = eval.NewMacro(macroDef.ID, macroDef.Expression, rs.model, &rs.opts.Opts); err != nil {
+		if macro.Macro, err = eval.NewMacro(macroDef.ID, macroDef.Expression, rs.model, rs.evalOpts); err != nil {
 			return nil, &ErrMacroLoad{Definition: macroDef, Err: err}
 		}
 	default:
-		if macro.Macro, err = eval.NewStringValuesMacro(macroDef.ID, macroDef.Values, &rs.opts.Opts); err != nil {
+		if macro.Macro, err = eval.NewStringValuesMacro(macroDef.ID, macroDef.Values, rs.evalOpts); err != nil {
 			return nil, &ErrMacroLoad{Definition: macroDef, Err: err}
 		}
 	}
 
-	rs.opts.AddMacro(macro.Macro)
+	rs.evalOpts.AddMacro(macro.Macro)
 
 	return macro.Macro, nil
 }
@@ -307,7 +308,7 @@ func (rs *RuleSet) AddRule(ruleDef *RuleDefinition) (*eval.Rule, error) {
 		return nil, &ErrRuleLoad{Definition: ruleDef, Err: errors.Wrap(err, "syntax error")}
 	}
 
-	if err := rule.GenEvaluator(rs.model, &rs.opts.Opts); err != nil {
+	if err := rule.GenEvaluator(rs.model, rs.evalOpts); err != nil {
 		return nil, &ErrRuleLoad{Definition: ruleDef, Err: err}
 	}
 
@@ -469,7 +470,7 @@ func (rs *RuleSet) runRuleActions(ctx *eval.Context, rule *Rule) error {
 			}
 			name += action.Set.Name
 
-			variable, found := rs.opts.Variables[name]
+			variable, found := rs.evalOpts.Variables[name]
 			if !found {
 				return fmt.Errorf("unknown variable: %s", name)
 			}
@@ -650,7 +651,7 @@ func (rs *RuleSet) LoadPolicies(loader *PolicyLoader) *multierror.Error {
 					continue
 				}
 
-				if _, found := rs.opts.Constants[varName]; found {
+				if _, found := rs.evalOpts.Constants[varName]; found {
 					errs = multierror.Append(errs, fmt.Errorf("variable '%s' conflicts with constant", varName))
 					continue
 				}
@@ -726,12 +727,12 @@ func (rs *RuleSet) LoadPolicies(loader *PolicyLoader) *multierror.Error {
 					continue
 				}
 
-				if existingVariable, found := rs.opts.Variables[varName]; found && reflect.TypeOf(variable) != reflect.TypeOf(existingVariable) {
+				if existingVariable, found := rs.evalOpts.Variables[varName]; found && reflect.TypeOf(variable) != reflect.TypeOf(existingVariable) {
 					errs = multierror.Append(errs, fmt.Errorf("conflicting types for variable '%s'", varName))
 					continue
 				}
 
-				rs.opts.Variables[varName] = variable
+				rs.evalOpts.Variables[varName] = variable
 			}
 		}
 	}
@@ -745,7 +746,7 @@ func (rs *RuleSet) LoadPolicies(loader *PolicyLoader) *multierror.Error {
 }
 
 // NewRuleSet returns a new ruleset for the specified data model
-func NewRuleSet(model eval.Model, eventCtor func() eval.Event, opts *Opts) *RuleSet {
+func NewRuleSet(model eval.Model, eventCtor func() eval.Event, opts *Opts, evalOpts *eval.Opts) *RuleSet {
 	var logger Logger
 
 	if opts.Logger != nil {
@@ -758,6 +759,7 @@ func NewRuleSet(model eval.Model, eventCtor func() eval.Event, opts *Opts) *Rule
 		model:            model,
 		eventCtor:        eventCtor,
 		opts:             opts,
+		evalOpts:         evalOpts,
 		eventRuleBuckets: make(map[eval.EventType]*RuleBucket),
 		rules:            make(map[eval.RuleID]*Rule),
 		logger:           logger,
