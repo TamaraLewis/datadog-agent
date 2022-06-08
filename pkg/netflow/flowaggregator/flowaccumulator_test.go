@@ -24,7 +24,7 @@ func setMockTimeNow(newTime time.Time) {
 func Test_flowAccumulator_add(t *testing.T) {
 	synFlag := uint32(2)
 	ackFlag := uint32(16)
-	synAckFlag := uint32(18)
+	synAckFlag := synFlag | ackFlag
 
 	// Given
 	flowA1 := &common.Flow{
