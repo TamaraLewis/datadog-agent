@@ -131,7 +131,7 @@ require (
 	github.com/iceber/iouring-go v0.0.0-20220511091803-99712053f7ec
 	github.com/imdario/mergo v0.3.12
 	github.com/iovisor/gobpf v0.2.0
-	github.com/itchyny/gojq v0.12.7
+	github.com/itchyny/gojq v0.12.8
 	github.com/json-iterator/go v1.1.12
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0
 	github.com/karrick/godirwalk v1.16.1
