@@ -20,8 +20,8 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/security/secl/compiler/ast"
 )
 
-func newOptsWithParams(constants map[string]interface{}, legacyFields map[Field]Field) *Opts {
-	return &Opts{
+func newReplCtxWithParams(constants map[string]interface{}, legacyFields map[Field]Field) ReplacementContext {
+	opts := &Opts{
 		Constants:    constants,
 		LegacyFields: legacyFields,
 		Variables: map[string]VariableValue{
@@ -33,9 +33,13 @@ func newOptsWithParams(constants map[string]interface{}, legacyFields map[Field]
 			}, nil),
 		},
 	}
+	return ReplacementContext{
+		Opts:       opts,
+		MacroStore: &MacroStore{},
+	}
 }
 
-func parseRule(expr string, model Model, opts *Opts) (*Rule, error) {
+func parseRule(expr string, model Model, replCtx ReplacementContext) (*Rule, error) {
 	rule := &Rule{
 		ID:         "id1",
 		Expression: expr,
@@ -45,10 +49,6 @@ func parseRule(expr string, model Model, opts *Opts) (*Rule, error) {
 		return nil, fmt.Errorf("parsing error: %v", err)
 	}
 
-	replCtx := ReplacementContext{
-		Opts:       opts,
-		MacroStore: &MacroStore{},
-	}
 	if err := rule.GenEvaluator(model, replCtx); err != nil {
 		return rule, fmt.Errorf("compilation error: %v", err)
 	}
@@ -61,8 +61,8 @@ func eval(t *testing.T, event *testEvent, expr string) (bool, *ast.Rule, error) 
 
 	ctx := NewContext(unsafe.Pointer(event))
 
-	opts := newOptsWithParams(testConstants, nil)
-	rule, err := parseRule(expr, model, opts)
+	replCtx := newReplCtxWithParams(testConstants, nil)
+	rule, err := parseRule(expr, model, replCtx)
 	if err != nil {
 		return false, nil, err
 	}
@@ -81,7 +81,8 @@ func emptyReplCtx() ReplacementContext {
 func TestStringError(t *testing.T) {
 	model := &testModel{}
 
-	rule, err := parseRule(`process.name != "/usr/bin/vipw" && process.uid != 0 && open.filename == 3`, model, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(`process.name != "/usr/bin/vipw" && process.uid != 0 && open.filename == 3`, model, replCtx)
 	if rule == nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,8 @@ func TestStringError(t *testing.T) {
 func TestIntError(t *testing.T) {
 	model := &testModel{}
 
-	rule, err := parseRule(`process.name != "/usr/bin/vipw" && process.uid != "test" && Open.Filename == "/etc/shadow"`, model, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(`process.name != "/usr/bin/vipw" && process.uid != "test" && Open.Filename == "/etc/shadow"`, model, replCtx)
 	if rule == nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,8 @@ func TestIntError(t *testing.T) {
 func TestBoolError(t *testing.T) {
 	model := &testModel{}
 
-	rule, err := parseRule(`(process.name != "/usr/bin/vipw") == "test"`, model, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(`(process.name != "/usr/bin/vipw") == "test"`, model, replCtx)
 	if rule == nil {
 		t.Fatal(err)
 	}
@@ -549,9 +552,12 @@ func TestPartial(t *testing.T) {
 
 	for _, test := range tests {
 		model := &testModel{}
-		opts := &Opts{Constants: testConstants, Variables: variables}
+		replCtx := ReplacementContext{
+			Opts:       &Opts{Constants: testConstants, Variables: variables},
+			MacroStore: &MacroStore{},
+		}
 
-		rule, err := parseRule(test.Expr, model, opts)
+		rule, err := parseRule(test.Expr, model, replCtx)
 		if err != nil {
 			t.Fatalf("error while evaluating `%s`: %s", test.Expr, err)
 		}
@@ -572,22 +578,21 @@ func TestPartial(t *testing.T) {
 
 func TestMacroList(t *testing.T) {
 	model := &testModel{}
-	opts := newOptsWithParams(make(map[string]interface{}), nil)
-	macroStore := &MacroStore{}
+	replCtx := newReplCtxWithParams(make(map[string]interface{}), nil)
 
 	macro, err := NewMacro(
 		"list",
 		`[ "/etc/shadow", "/etc/password" ]`,
 		model,
-		ReplacementContext{Opts: opts, MacroStore: macroStore},
+		replCtx,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	macroStore.AddMacro(macro)
+	replCtx.AddMacro(macro)
 
 	expr := `"/etc/shadow" in list`
-	rule, err := parseRule(expr, model, opts)
+	rule, err := parseRule(expr, model, replCtx)
 	if err != nil {
 		t.Fatalf("error while evaluating `%s`: %s", expr, err)
 	}
@@ -601,19 +606,18 @@ func TestMacroList(t *testing.T) {
 
 func TestMacroExpression(t *testing.T) {
 	model := &testModel{}
-	opts := newOptsWithParams(make(map[string]interface{}), nil)
-	macroStore := &MacroStore{}
+	replCtx := newReplCtxWithParams(make(map[string]interface{}), nil)
 
 	macro, err := NewMacro(
 		"is_passwd",
 		`open.filename in [ "/etc/shadow", "/etc/passwd" ]`,
 		model,
-		ReplacementContext{Opts: opts, MacroStore: macroStore},
+		replCtx,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	macroStore.AddMacro(macro)
+	replCtx.AddMacro(macro)
 
 	event := &testEvent{
 		process: testProcess{
@@ -626,7 +630,7 @@ func TestMacroExpression(t *testing.T) {
 
 	expr := `process.name == "httpd" && is_passwd`
 
-	rule, err := parseRule(expr, model, opts)
+	rule, err := parseRule(expr, model, replCtx)
 	if err != nil {
 		t.Fatalf("error while evaluating `%s`: %s", expr, err)
 	}
@@ -639,19 +643,18 @@ func TestMacroExpression(t *testing.T) {
 
 func TestMacroPartial(t *testing.T) {
 	model := &testModel{}
-	opts := newOptsWithParams(make(map[string]interface{}), nil)
-	macroStore := &MacroStore{}
+	replCtx := newReplCtxWithParams(make(map[string]interface{}), nil)
 
 	macro, err := NewMacro(
 		"is_passwd",
 		`open.filename in [ "/etc/shadow", "/etc/passwd" ]`,
 		model,
-		ReplacementContext{Opts: opts, MacroStore: macroStore},
+		replCtx,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	macroStore.AddMacro(macro)
+	replCtx.AddMacro(macro)
 
 	event := &testEvent{
 		process: testProcess{
@@ -664,7 +667,7 @@ func TestMacroPartial(t *testing.T) {
 
 	expr := `process.name == "httpd" && is_passwd`
 
-	rule, err := parseRule(expr, model, opts)
+	rule, err := parseRule(expr, model, replCtx)
 	if err != nil {
 		t.Fatalf("error while evaluating `%s`: %s", expr, err)
 	}
@@ -703,32 +706,31 @@ func TestNestedMacros(t *testing.T) {
 	}
 
 	model := &testModel{}
-	opts := newOptsWithParams(make(map[string]interface{}), nil)
-	macroStore := &MacroStore{}
+	replCtx := newReplCtxWithParams(make(map[string]interface{}), nil)
 
 	macro1, err := NewMacro(
 		"sensitive_files",
 		`[ "/etc/shadow", "/etc/passwd" ]`,
 		model,
-		ReplacementContext{Opts: opts, MacroStore: macroStore},
+		replCtx,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	macroStore.AddMacro(macro1)
+	replCtx.AddMacro(macro1)
 
 	macro2, err := NewMacro(
 		"is_sensitive_opened",
 		`open.filename in sensitive_files`,
 		model,
-		ReplacementContext{Opts: opts, MacroStore: macroStore},
+		replCtx,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	macroStore.AddMacro(macro2)
+	replCtx.AddMacro(macro2)
 
-	rule, err := parseRule(macro2.ID, model, opts)
+	rule, err := parseRule(macro2.ID, model, replCtx)
 	if err != nil {
 		t.Fatalf("error while evaluating `%s`: %s", macro2.ID, err)
 	}
@@ -741,14 +743,15 @@ func TestNestedMacros(t *testing.T) {
 
 func TestFieldValidator(t *testing.T) {
 	expr := `process.uid == -100 && open.filename == "/etc/passwd"`
-	if _, err := parseRule(expr, &testModel{}, &Opts{}); err == nil {
+	replCtx := newReplCtxWithParams(nil, nil)
+	if _, err := parseRule(expr, &testModel{}, replCtx); err == nil {
 		t.Error("expected an error on process.uid being negative")
 	}
 }
 
 func TestLegacyField(t *testing.T) {
 	model := &testModel{}
-	opts := newOptsWithParams(testConstants, legacyFields)
+	replCtx := newReplCtxWithParams(testConstants, legacyFields)
 
 	tests := []struct {
 		Expr     string
@@ -760,7 +763,7 @@ func TestLegacyField(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		_, err := parseRule(test.Expr, model, opts)
+		_, err := parseRule(test.Expr, model, replCtx)
 		if err == nil != test.Expected {
 			t.Errorf("expected result `%t` not found, got `%t`\n%s", test.Expected, err == nil, test.Expr)
 		}
@@ -769,7 +772,7 @@ func TestLegacyField(t *testing.T) {
 
 func TestRegisterSyntaxError(t *testing.T) {
 	model := &testModel{}
-	opts := newOptsWithParams(testConstants, nil)
+	replCtx := newReplCtxWithParams(testConstants, nil)
 
 	tests := []struct {
 		Expr     string
@@ -785,7 +788,7 @@ func TestRegisterSyntaxError(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		_, err := parseRule(test.Expr, model, opts)
+		_, err := parseRule(test.Expr, model, replCtx)
 		if err == nil != test.Expected {
 			t.Errorf("expected result `%t` not found, got `%t`\n%s", test.Expected, err == nil, test.Expr)
 		}
@@ -936,9 +939,9 @@ func TestRegisterPartial(t *testing.T) {
 
 	for _, test := range tests {
 		model := &testModel{}
-		opts := &Opts{Constants: testConstants}
+		replCtx := newReplCtxWithParams(testConstants, nil)
 
-		rule, err := parseRule(test.Expr, model, opts)
+		rule, err := parseRule(test.Expr, model, replCtx)
 		if err != nil {
 			t.Fatalf("error while evaluating `%s`: %s", test.Expr, err)
 		}
@@ -1315,9 +1318,9 @@ func TestOpOverridePartials(t *testing.T) {
 
 	for _, test := range tests {
 		model := &testModel{}
-		opts := &Opts{Constants: testConstants}
+		replCtx := newReplCtxWithParams(testConstants, nil)
 
-		rule, err := parseRule(test.Expr, model, opts)
+		rule, err := parseRule(test.Expr, model, replCtx)
 		if err != nil {
 			t.Fatalf("error while evaluating `%s`: %s", test.Expr, err)
 		}
@@ -1362,7 +1365,8 @@ func BenchmarkArray(b *testing.B) {
 
 	expr := strings.Join(exprs, " && ")
 
-	rule, err := parseRule(expr, &testModel{}, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(expr, &testModel{}, replCtx)
 	if err != nil {
 		b.Fatalf("%s\n%s", err, expr)
 	}
@@ -1395,7 +1399,8 @@ func BenchmarkComplex(b *testing.B) {
 
 	expr := strings.Join(exprs, " && ")
 
-	rule, err := parseRule(expr, &testModel{}, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(expr, &testModel{}, replCtx)
 	if err != nil {
 		b.Fatalf("%s\n%s", err, expr)
 	}
@@ -1432,7 +1437,8 @@ func BenchmarkPartial(b *testing.B) {
 
 	model := &testModel{}
 
-	rule, err := parseRule(expr, model, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(expr, model, replCtx)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1474,7 +1480,8 @@ func BenchmarkPool(b *testing.B) {
 
 	expr := strings.Join(exprs, " && ")
 
-	rule, err := parseRule(expr, &testModel{}, &Opts{})
+	replCtx := newReplCtxWithParams(nil, nil)
+	rule, err := parseRule(expr, &testModel{}, replCtx)
 	if err != nil {
 		b.Fatalf("%s\n%s", err, expr)
 	}
