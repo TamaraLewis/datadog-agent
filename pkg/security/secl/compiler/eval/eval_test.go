@@ -45,7 +45,7 @@ func parseRule(expr string, model Model, opts *Opts) (*Rule, error) {
 		return nil, fmt.Errorf("parsing error: %v", err)
 	}
 
-	replCtx := EvalReplacementContext{
+	replCtx := ReplacementContext{
 		Opts:       opts,
 		MacroStore: &MacroStore{},
 	}
@@ -71,8 +71,8 @@ func eval(t *testing.T, event *testEvent, expr string) (bool, *ast.Rule, error) 
 	return r1, rule.GetAst(), nil
 }
 
-func emptyReplCtx() EvalReplacementContext {
-	return EvalReplacementContext{
+func emptyReplCtx() ReplacementContext {
+	return ReplacementContext{
 		Opts:       &Opts{},
 		MacroStore: &MacroStore{},
 	}
@@ -579,7 +579,7 @@ func TestMacroList(t *testing.T) {
 		"list",
 		`[ "/etc/shadow", "/etc/password" ]`,
 		model,
-		EvalReplacementContext{Opts: opts, MacroStore: macroStore},
+		ReplacementContext{Opts: opts, MacroStore: macroStore},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +608,7 @@ func TestMacroExpression(t *testing.T) {
 		"is_passwd",
 		`open.filename in [ "/etc/shadow", "/etc/passwd" ]`,
 		model,
-		EvalReplacementContext{Opts: opts, MacroStore: macroStore},
+		ReplacementContext{Opts: opts, MacroStore: macroStore},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -646,7 +646,7 @@ func TestMacroPartial(t *testing.T) {
 		"is_passwd",
 		`open.filename in [ "/etc/shadow", "/etc/passwd" ]`,
 		model,
-		EvalReplacementContext{Opts: opts, MacroStore: macroStore},
+		ReplacementContext{Opts: opts, MacroStore: macroStore},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -710,7 +710,7 @@ func TestNestedMacros(t *testing.T) {
 		"sensitive_files",
 		`[ "/etc/shadow", "/etc/passwd" ]`,
 		model,
-		EvalReplacementContext{Opts: opts, MacroStore: macroStore},
+		ReplacementContext{Opts: opts, MacroStore: macroStore},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -721,7 +721,7 @@ func TestNestedMacros(t *testing.T) {
 		"is_sensitive_opened",
 		`open.filename in sensitive_files`,
 		model,
-		EvalReplacementContext{Opts: opts, MacroStore: macroStore},
+		ReplacementContext{Opts: opts, MacroStore: macroStore},
 	)
 	if err != nil {
 		t.Fatal(err)
