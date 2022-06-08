@@ -26,6 +26,7 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/collector/corechecks/cluster"
 	"github.com/DataDog/datadog-agent/pkg/config"
 	"github.com/DataDog/datadog-agent/pkg/metrics"
+	"github.com/DataDog/datadog-agent/pkg/telemetry"
 	"github.com/DataDog/datadog-agent/pkg/util"
 	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver"
 	"github.com/DataDog/datadog-agent/pkg/util/kubernetes/clustername"
@@ -43,6 +44,14 @@ const (
 
 	defaultCacheExpire = 2 * time.Minute
 	defaultCachePurge  = 10 * time.Minute
+)
+
+var emittedEvents = telemetry.NewCounterWithOpts(
+	kubernetesAPIServerCheckName,
+	"emitted_events",
+	[]string{"kind", "component", "type", "reason"},
+	"Number of events emitted by the check.",
+	telemetry.Options{NoDoubleUnderscoreSep: true},
 )
 
 // KubeASConfig is the config of the API server.
@@ -299,30 +308,53 @@ func (k *KubeASCheck) parseComponentStatus(sender aggregator.Sender, componentsS
 // - extracts some attributes and builds a structure ready to be submitted as a Datadog event (bundle)
 // - formats the bundle and submit the Datadog event
 func (k *KubeASCheck) processEvents(sender aggregator.Sender, events []*v1.Event) error {
-	eventsByObject := make(map[string]*kubernetesEventBundle)
+	bundlesByObject := make(map[string]*kubernetesEventBundle)
 
 	for _, event := range events {
-		id := bundleID(event)
-		bundle, found := eventsByObject[id]
-		if found == false {
-			bundle = newKubernetesEventBundler(event)
-			eventsByObject[id] = bundle
+		// Skip events the same way `addEvent` does. We cannot emit
+		// telemetry from inside that func due to several bugs in its
+		// aggregation
+		if event.InvolvedObject.Kind != "" &&
+			event.InvolvedObject.Name != "" &&
+			event.Reason != "" &&
+			event.Message != "" {
+
+			emittedEvents.Inc(
+				event.InvolvedObject.Kind,
+				event.Source.Component,
+				event.Type,
+				event.Reason,
+			)
 		}
+
+		id := bundleID(event)
+
+		bundle, found := bundlesByObject[id]
+		if !found {
+			bundle = newKubernetesEventBundler(event)
+			bundlesByObject[id] = bundle
+		}
+
 		err := bundle.addEvent(event)
 		if err != nil {
 			k.Warnf("Error while bundling events, %s.", err.Error()) //nolint:errcheck
 		}
 	}
-	hostname, _ := util.GetHostname(context.TODO())
-	clusterName := clustername.GetClusterName(context.TODO(), hostname)
-	for _, bundle := range eventsByObject {
+
+	ctx := context.TODO()
+	hostname, _ := util.GetHostname(ctx)
+	clusterName := clustername.GetClusterName(ctx, hostname)
+
+	for _, bundle := range bundlesByObject {
 		datadogEv, err := bundle.formatEvents(clusterName, k.providerIDCache)
 		if err != nil {
 			k.Warnf("Error while formatting bundled events, %s. Not submitting", err.Error()) //nolint:errcheck
 			continue
 		}
+
 		sender.Event(datadogEv)
 	}
+
 	return nil
 }
 
